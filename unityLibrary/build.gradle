@@ -1,0 +1,134 @@
+plugins {
+    id 'com.android.library' // Apply Android library plugin
+}
+
+android {
+    namespace 'com.codewithhetang.arfood_final'  // Namespace for the ARFOOD project
+    namespace 'com.codewithhetang.unityLibrary'  // Namespace for Unity library project
+    compileSdkVersion 34 // Updated to compile SDK version
+
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 34
+        versionCode 1
+        versionName '0.1'
+        ndk {
+            abiFilters 'arm64-v8a' // Specify ABI filters for supported architectures
+        }
+        consumerProguardFiles 'proguard-unity.txt'  // Proguard file for Unity integration
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21  // Set Java 11 for compatibility
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    lintOptions {
+        abortOnError false  // Continue build even if lint warnings are present
+    }
+
+    aaptOptions {
+        noCompress = ['.unity3d', '.ress', '.resource', '.obb', '.bundle', '.unityexp']  // Avoid compressing Unity-specific files
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~"  // Ignore unnecessary files in assets
+    }
+
+    packagingOptions {
+        doNotStrip '*/arm64-v8a/*.so'  // Prevent stripping of arm64-v8a architecture libraries
+        jniLibs.useLegacyPackaging = true // Enable legacy packaging for JNI libraries
+    }
+
+    sourceSets {
+        main {
+            // Include Unity's streaming assets and resources
+            assets.srcDirs += file("src/main/assets/streamingassets")
+            res.srcDirs += file("src/main/res")  // Include Unity's resources if applicable
+            jni.srcDirs = ["src/main/Il2CppOutputProject"] // Ensure Il2CppOutputProject is included for JNI files
+        }
+    }
+}
+
+// Repositories block to specify where the .aar files are located and resolve dependencies
+repositories {
+    mavenCentral()  // Always include Maven Central for external dependencies
+    google()  // Always include Google's repository for Android dependencies
+
+    // If using local libraries in 'libs' directory:
+    maven {
+        url uri('file:///C:/Users/patel/AndroidStudioProjects/ARFOOD_Final/app/src/main/libs') // Path to the local repository
+    }
+}
+
+// Dependencies block for including ARCore, Vuforia, Unity AARs/JARs
+dependencies {
+
+    implementation(':unityLibrary')
+
+    implementation 'com.unity3d:unity-android-2022.3.34f1'
+
+    implementation project(':unityLibrary') // Ensure this is correct
+    // Vuforia and Unity AARs (Manually reference local AAR files in 'libs' directory)
+    implementation(name: 'VuforiaEngine-9.7.0', ext: 'aar')  // Ensure this file is located in 'libs' folder
+    implementation(name: 'unity-android-library-2020.3.0', ext: 'aar') // Ensure this file is located in 'libs' folder
+
+    // Vuforia and Unity dependencies from Maven repositories
+//    implementation 'com.vuforia:vuforia-engine:9.7.0'  // Vuforia dependency
+//    implementation 'com.unity3d:unity-android-library:2020.3.0'  // Unity dependency
+
+    // ARCore dependency from Maven Central
+    implementation 'com.google.ar:core:1.36.0'
+
+    // Include all JAR files in the libs folder (optional if you have additional JARs)
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+// Function to get the SDK directory from local.properties
+def getSdkDir() {
+    Properties local = new Properties()
+    local.load(new FileInputStream("${rootDir}/local.properties"))
+    return local.getProperty('sdk.dir')
+}
+
+// Function to build Il2Cpp from Unity for Android
+def BuildIl2Cpp(String workingDir, String configuration, String architecture, String abi, String[] staticLibraries) {
+    def commandLineArgs = []
+    commandLineArgs.add("--compile-cpp")
+    commandLineArgs.add("--platform=Android")
+    commandLineArgs.add("--architecture=" + architecture)
+    commandLineArgs.add("--outputpath=" + workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.so")
+    commandLineArgs.add("--baselib-directory=" + workingDir + "/src/main/jniStaticLibs/" + abi)
+    commandLineArgs.add("--incremental-g-c-time-slice=3")
+    commandLineArgs.add("--configuration=" + configuration)
+    commandLineArgs.add("--dotnetprofile=unityaot-linux")
+    commandLineArgs.add("--profiler-report")
+    commandLineArgs.add("--profiler-output-file=" + workingDir + "/build/il2cpp_" + abi + "_" + configuration + "/il2cpp_conv.traceevents")
+    commandLineArgs.add("--print-command-line")
+    commandLineArgs.add("--data-folder=" + workingDir + "/src/main/Il2CppOutputProject/Source/il2cppOutput/data")
+    commandLineArgs.add("--generatedcppdir=" + workingDir + "/src/main/Il2CppOutputProject/Source/il2cppOutput")
+    commandLineArgs.add("--cachedirectory=" + workingDir + "/build/il2cpp_" + abi + "_" + configuration + "/il2cpp_cache")
+    commandLineArgs.add("--tool-chain-path=" + android.ndkDirectory)
+
+    staticLibraries.eachWithIndex { fileName, i ->
+        commandLineArgs.add("--additional-libraries=" + workingDir + "/src/main/jniStaticLibs/" + abi + "/" + fileName)
+    }
+
+    def executableExtension = ""
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        executableExtension = ".exe"
+        commandLineArgs = commandLineArgs*.replace('\"', '\\\"')
+    }
+
+    exec {
+        executable workingDir + "/src/main/Il2CppOutputProject/IL2CPP/build/deploy/il2cpp" + executableExtension
+        args commandLineArgs
+        environment "ANDROID_SDK_ROOT", getSdkDir()
+    }
+
+    delete workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.sym.so"
+    ant.move(file: workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.dbg.so", tofile: workingDir + "/symbols/" + abi + "/libil2cpp.so")
+}
+
+tasks.whenTaskAdded { task ->
+    if (task.name == 'bundleLibCompileToJarDebug') {
+        task.dependsOn 'compileDebugJavaWithJavac'
+    }
+}
